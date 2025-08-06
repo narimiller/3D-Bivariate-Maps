@@ -31,7 +31,7 @@ if (!dir.exists("images")) dir.create("images")
 
 # IRS data
 irs <- read_csv("data/22incyallnoagi.csv") |>
-  filter(STATE == "CA") |>
+  filter(STATE == "CA" & COUNTYFIPS != "000") |>
   mutate(
     FIPS = paste0(STATEFIPS, COUNTYFIPS)
   ) |>
@@ -43,7 +43,7 @@ summary(irs$efile_rate)
 
 # fcc data
 fcc <- read_csv("data/county_tiers_201406_202406.csv") |>
-  filter(Year == 2022) |>  # filter for the year 2022
+  filter(Year == 2022) |> 
   mutate(
     # Assign tier value midpoints for Tier_3 (≥25 Mbps)
     broadband_per_1000 = case_when(
@@ -53,22 +53,23 @@ fcc <- read_csv("data/county_tiers_201406_202406.csv") |>
       Tier_3 == 3 ~ 500,
       Tier_3 == 4 ~ 700,
       Tier_3 == 5 ~ 900,
-      TRUE ~ NA_real_ # missing numeric value
+      TRUE ~ NA_real_ 
     ),
     broadband_pct = broadband_per_1000 / 10  # Convert to percent of households
   ) |>
-  select(FIPS, broadband_pct)  # estimate % of households
+  select(FIPS, broadband_pct)  
 
 head(fcc, 10)
 summary(fcc$broadband_pct)
 
-# merge
+# Merge
 df <- left_join(irs, fcc, by = "FIPS") |> drop_na() |>
   select(FIPS, efile_rate, broadband_pct)
 
 # 3. GET POLYGONS (WITH FIPS CODES)
 # ------------------
-# download all U.S. counties as sf object
+
+# Download counties as sf object
 counties <- tigris::counties(cb = TRUE, class = "sf") |> 
   filter(STATEFP == "06") |>   # California only
   mutate(FIPS = GEOID)
@@ -77,12 +78,14 @@ counties <- tigris::counties(cb = TRUE, class = "sf") |>
 target_crs <- "EPSG:5070"  # Albers Equal Area Conic projection
 counties_proj <- st_transform(counties, target_crs)
 
-# join with data
+# Join with data
 map_data <- left_join(counties_proj, df, by = "FIPS")
 
 # 4. BREAKS, PALETTE, AND THEME
 # ------------------
-breaks <- bi_class( # info about bivariate scale and distribution
+
+# Binning / create bivariate classes
+breaks <- bi_class( 
   map_data,
   x = efile_rate, y = broadband_pct,
   style = "fisher", dim = 3
@@ -128,14 +131,14 @@ custom_theme <- function(){
     )
 }
 
-# 4. 2D BIVARIATE MAP
+# 5. 2D BIVARIATE MAP
 # ------------------
 
-# create bivariate map using ggplot2
+# Create bivariate map using ggplot2
 map <- ggplot(breaks) +
   geom_sf(
     aes(
-      fill = bi_class # column for fill aesthetic
+      fill = bi_class 
     ), show.legend = FALSE
   ) +
   biscale::bi_scale_fill( # how to fill values from bivariate scale
@@ -154,7 +157,7 @@ map <- ggplot(breaks) +
   ) +
   custom_theme()
 
-# create legend
+# Create legend
 legend <- biscale::bi_legend(
   pal = custom_pal2, 
   flip_axes = FALSE,
@@ -162,10 +165,10 @@ legend <- biscale::bi_legend(
   dim = 3, 
   xlab = "E-file Rate (%)", 
   ylab = "Broadband Access (% of households)",
-  size = 8.5 # size of label text in legend
+  size = 8.5 # size of label text
 )
 
-# inspect output, get x and y ranges of map to help with legend placement
+# Inspect output, get x and y ranges of map to help with legend placement
 map_built <- ggplot_build(map)
 str(map_built$layout$panel_params[[1]])
 
@@ -176,13 +179,13 @@ y_range <- c(1181840, 2513229)
 x_total <- diff(x_range)  
 y_total <- diff(y_range)  
 
-# Convert to 0-1 scale (like cowplot) (x=0.05, y=0.13, width=0.25, height=0.25)
+# Convert to 0-1 scale (like cowplot)
 xmin <- x_range[1] + (0.62 * x_total)   
 xmax <- x_range[1] + (1.00 * x_total)   
 ymin <- y_range[1] + (0.54 * y_total)   
 ymax <- y_range[1] + (0.92 * y_total)   
 
-# combine map with legend
+# Combine map with legend
 full_map <- map + 
   annotation_custom(
     grob = ggplotGrob(legend),
@@ -192,14 +195,14 @@ full_map <- map +
 
 print(full_map)
 
-#save as PNG
+# Save as PNG
 ggsave(
   filename = "images/ca_efile_broadband_2d_2.png",
   width = 7, height = 10, dpi = 600,
   device = "png", bg = "white", full_map
 )
 
-# 5. CREATE TERRAIN LAYER
+# 6. CREATE TERRAIN LAYER
 # ------------------
 
 # Get California elevation data
@@ -212,22 +215,22 @@ terra::mask(counties_proj)
 
 terra::crs(ca_dem)
 
-# project DEM and convert to dataframe
+# Project DEM and convert to dataframe
 dem_df <- ca_dem |>
   terra::project(target_crs) |>
   as.data.frame(xy = TRUE, na.rm = TRUE) # remove NAs
 
-# rename third column
+# Rename third column
 names(dem_df)[3] <- "elevation"
 
-# create terrain layer map
+# Create terrain layer map
 dem_map <- ggplot(
   dem_df, aes(x = x, y = y, fill = elevation)
   ) +
   geom_raster() +
   scale_fill_gradientn(colors = "white") + # required for rayshader
   guides(fill = "none") +
-  labs( # labels
+  labs(
     title = "CALIFORNIA: E-Filing Rate and Broadband Access by County",
     subtitle = "Bivariate map of electronic tax filing rates and estimated broadband access (≥25 Mbps), 2022",
     caption = "Source: IRS and FCC data, 2022",
@@ -241,11 +244,11 @@ dem_map <- ggplot(
 
 ggsave("images/check_dem_map_2.png", dem_map, width = 7, height = 10, dpi = 300)
 
-# 6. RENDER 3D SCENE
+# 7. 3D SCENE
 # ------------------
 
 rayshader::plot_gg(
-  ggobj = full_map, # biv 2D map and legend
+  ggobj = full_map, # biv 2D map + legend
   ggobj_height = dem_map, # terrain layer
   width = 7, height = 10, # size of output in inches
   windowsize = c(700, 1000),
@@ -256,7 +259,7 @@ rayshader::plot_gg(
   multicore = TRUE,
 )
 
-# 7. LIGHTS
+# 8. LIGHTS
 # ------------------
 
 url <- "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/brown_photostudio_02_4k.hdr"
@@ -268,8 +271,9 @@ download.file(
   mode = "wb" 
 )
 
-# 8. RENDER 3D OBJECT
+# 9. RENDER 3D OBJECT
 # ------------------
+
 rayshader::render_highquality(
   filename = "images/ca_efile_broadband_3d_2.png",
   preview = TRUE,
